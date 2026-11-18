@@ -1,6 +1,7 @@
 import { getModule } from '@valenced/modules/finders'
 import { byProps } from '@valenced/modules/finders/filters'
 import { patchMessageActionSheet } from './actionsheet'
+import { registerTranslateCommand } from './command'
 import { getSettings, loadSettings, saveSettings } from './storage'
 import { clearTranslationCache, translate } from './translator'
 
@@ -127,7 +128,7 @@ function handleRevert(message: any) {
 // Plugin lifecycle
 // ---------------------------------------------------------------------------
 export default plugin({
-	async start() {
+	async start(api) {
 		await loadSettings()
 		console.log('[Dislate] Dislate EX initialized')
 
@@ -137,6 +138,9 @@ export default plugin({
 			(id: string) => messageCache.has(id),
 		)
 		cleanups.push(unpatch)
+
+		const unregisterCmd = registerTranslateCommand(api)
+		cleanups.push(unregisterCmd)
 
 		const g = globalThis as any
 		g.Dislate = {

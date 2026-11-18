@@ -1020,6 +1020,22 @@ CRITICAL FORMATTING RULES:
 		)
 	}
 
+	function resolveLanguageCode(input) {
+		const raw = (input || '').trim().toLowerCase()
+		if (LANGUAGES[raw]) return raw
+		const byName = Object.entries(LANGUAGES).find(
+			([, name]) => name.toLowerCase() === raw,
+		)
+		if (byName) return byName[0]
+		const partial = Object.entries(LANGUAGES).find(([, name]) =>
+			name.toLowerCase().startsWith(raw),
+		)
+		if (partial) return partial[0]
+		return raw
+	}
+
+	const localCleanups = []
+
 	// ---------------------------------------------------------------------------
 	// Plugin Definition
 	// ---------------------------------------------------------------------------
@@ -1027,11 +1043,12 @@ CRITICAL FORMATTING RULES:
 		default: plugin({
 			start(api) {
 				loadSettings()
-				console.log('[Dislate] Dislate EX initialized (AI model fetch enabled)')
+				console.log('[Dislate] Dislate EX initialized (AI model fetch & slash command enabled)')
 
 				const React = valenced?.react?.React || globalThis.React
 				const getModules = valenced?.modules?.finders?.getModules
 				const withName = valenced?.modules?.finders?.filters?.withName
+				const withProps = valenced?.modules?.finders?.filters?.withProps
 				const instead = valenced?.patcher?.instead
 				const Design = valenced?.discord?.design?.Design
 				const ActionSheetActionCreators =
@@ -1098,6 +1115,7 @@ CRITICAL FORMATTING RULES:
 							if (api?.cleanup) {
 								api.cleanup(unpatch)
 							}
+							localCleanups.push(unpatch)
 						},
 						{ returnNamespace: true },
 					)
@@ -1105,6 +1123,168 @@ CRITICAL FORMATTING RULES:
 					if (api?.cleanup) {
 						api.cleanup(unsubscribe)
 					}
+					localCleanups.push(unsubscribe)
+				}
+
+				// -------------------------------------------------------------------
+				// /translate <toLang> <content> Slash Command
+				// -------------------------------------------------------------------
+				let messageUtil = null
+				let botMessageUtil = null
+
+				if (getModules && withProps) {
+					const unsubMsg = getModules(withProps('sendMessage'), (mod) => {
+						if (mod?.sendMessage) messageUtil = mod
+					})
+					if (api?.cleanup) api.cleanup(unsubMsg)
+					localCleanups.push(unsubMsg)
+
+					const unsubBot = getModules(withProps('sendBotMessage'), (mod) => {
+						if (mod?.sendBotMessage) botMessageUtil = mod
+					})
+					if (api?.cleanup) api.cleanup(unsubBot)
+					localCleanups.push(unsubBot)
+				}
+
+				const translateCmd = {
+					name: 'translate',
+					displayName: 'translate',
+					description: 'Translate and send a message in any target language',
+					displayDescription: 'Translate and send a message in any target language',
+					applicationId: '-1',
+					type: 1, // ApplicationCommandType.CHAT
+					inputType: 1, // ApplicationCommandInputType.BUILT_IN_TEXT
+					shouldHide: () => false,
+					options: [
+						{
+							name: 'toLang',
+							displayName: 'toLang',
+							description: 'Target language code (e.g. es, ja, fr, de, ru) or language name',
+							displayDescription: 'Target language code (e.g. es, ja, fr, de, ru) or language name',
+							type: 3, // ApplicationCommandOptionType.STRING
+							required: true,
+						},
+						{
+							name: 'content',
+							displayName: 'content',
+							description: 'Content to translate and send',
+							displayDescription: 'Content to translate and send',
+							type: 3, // ApplicationCommandOptionType.STRING
+							required: true,
+						},
+					],
+					execute: async (args, ctx) => {
+						const channelId = ctx?.channel?.id
+						try {
+							const toLangArg = (
+								args?.find?.((a) => a.name === 'toLang')?.value ??
+								args?.[0]?.value ??
+								''
+							).toString().trim()
+
+							const contentArg = (
+								args?.find?.((a) => a.name === 'content')?.value ??
+								args?.[1]?.value ??
+								''
+							).toString().trim()
+
+							if (!toLangArg || !contentArg) {
+								const bot = botMessageUtil || messageUtil
+								if (channelId && bot?.sendBotMessage) {
+									bot.sendBotMessage(
+										channelId,
+										'[Dislate] Both <toLang> and <content> are required.',
+									)
+								}
+								return
+							}
+
+							const targetLang = resolveLanguageCode(toLangArg)
+							const { masked, placeholders } = maskContent(contentArg)
+
+							const res = await translate(masked, {
+								engine: currentSettings.engine,
+								sourceLang: 'auto',
+								targetLang,
+							})
+
+							const translatedText = unmaskContent(res.translatedText, placeholders)
+							return { content: translatedText }
+						} catch (err) {
+							console.error('[Dislate] /translate command error:', err)
+							const bot = botMessageUtil || messageUtil
+							if (channelId && bot?.sendBotMessage) {
+								bot.sendBotMessage(
+									channelId,
+									`[Dislate] Translation failed: ${err?.message || err}`,
+								)
+							}
+						}
+					},
+				}
+
+				if (api?.commands?.commands?.registerCommand) {
+					const unregister = api.commands.commands.registerCommand(translateCmd)
+					if (api?.cleanup) api.cleanup(unregister)
+					localCleanups.push(unregister)
+				} else if (getModules && withProps && instead) {
+					const unpatchExec = instead(translateCmd, 'execute', (args, orig) => {
+						Promise.resolve(orig.apply(translateCmd, args)).then((ret) => {
+							if (ret && typeof ret === 'object' && ret.content) {
+								const chId = args?.[1]?.channel?.id
+								if (chId && messageUtil?.sendMessage) {
+									messageUtil.sendMessage(chId, ret)
+								}
+							}
+						})
+					})
+					if (api?.cleanup) api.cleanup(unpatchExec)
+					localCleanups.push(unpatchExec)
+
+					const unsubCmds = getModules(withProps('getBuiltInCommands'), (commandsModule) => {
+						let builtIns = []
+						try {
+							builtIns = commandsModule.getBuiltInCommands(1, true, false)
+						} catch {
+							try {
+								builtIns = commandsModule.getBuiltInCommands([1, 2, 3], true, false)
+							} catch {}
+						}
+
+						let lastId = 0
+						if (Array.isArray(builtIns) && builtIns.length > 0) {
+							const sorted = [...builtIns].sort(
+								(a, b) => (parseInt(b.id, 10) || 0) - (parseInt(a.id, 10) || 0),
+							)
+							lastId = parseInt(sorted[sorted.length - 1]?.id, 10) || 0
+						}
+						translateCmd.id = (lastId - 1).toString()
+						translateCmd.untranslatedName = translateCmd.name
+						translateCmd.untranslatedDescription = translateCmd.description
+
+						if (translateCmd.options) {
+							for (const opt of translateCmd.options) {
+								opt.displayName = opt.name
+								opt.displayDescription = opt.description
+							}
+						}
+
+						const unpatchBuiltIn = instead(commandsModule, 'getBuiltInCommands', (args, orig) => {
+							const res = orig.apply(commandsModule, args) ?? []
+							const commandType = args[0]
+							const matchType = Array.isArray(commandType)
+								? commandType.includes(translateCmd.type)
+								: translateCmd.type === commandType
+							if (matchType && !translateCmd.shouldHide?.()) {
+								return res.concat([translateCmd])
+							}
+							return res
+						})
+						if (api?.cleanup) api.cleanup(unpatchBuiltIn)
+						localCleanups.push(unpatchBuiltIn)
+					})
+					if (api?.cleanup) api.cleanup(unsubCmds)
+					localCleanups.push(unsubCmds)
 				}
 
 				// Expose globally for devtools / console debugging
@@ -1124,6 +1304,12 @@ CRITICAL FORMATTING RULES:
 				if (globalThis.Dislate) {
 					delete globalThis.Dislate
 				}
+				for (const fn of localCleanups) {
+					try {
+						fn()
+					} catch {}
+				}
+				localCleanups.length = 0
 				messageCache.clear()
 				translationCache.clear()
 			},

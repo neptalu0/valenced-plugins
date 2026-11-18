@@ -28,6 +28,9 @@ A port and enhanced modernization of the **Dislate** in-app message translation 
 
 ## ✨ Features
 
+- **Slash Command Outgoing Translation:** `/translate <toLang> <content>` — translate your message into any target language and send it directly to the channel.
+  - Supports both ISO language codes (`es`, `ja`, `de`, `fr`, etc.) and full names (`Spanish`, `Japanese`, etc.).
+  - Preserves mentions (`<@id>`), channel tags (`<#id>`), custom emojis (`<:name:id>`), code blocks, and markdown formatting.
 - **In-App Message Translation:** Long-press any message → tap **"Translate Message"**.
 - **Instant Revert:** Long-press a translated message → tap **"Revert Message"** to restore original content.
 - **In-Place UI Updates:** Dispatches seamlessly via Discord's internal Flux Dispatcher without reloading the chat.
@@ -44,7 +47,7 @@ A port and enhanced modernization of the **Dislate** in-app message translation 
 ## 📦 Installation (Valenced ZIP)
 
 1. Download or build the plugin ZIP archive:
-   - `app.valenced.dislate@1.3.0.zip`
+   - `app.valenced.dislate@1.4.0.zip`
 2. Open **Discord** with **Valenced** installed.
 3. Go to **User Settings** → **Valenced** → **Plugins**.
 4. Tap **Import / Install from ZIP** and select `app.valenced.dislate@1.3.0.zip`.
