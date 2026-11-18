@@ -1247,9 +1247,94 @@ CRITICAL FORMATTING RULES:
 					} catch {}
 				}
 
+				function findModuleByProps(...props) {
+					try {
+						const finders =
+							valenced?.modules?.finders ||
+							globalThis.valenced?.modules?.finders
+						const filters = finders?.filters
+						const filterFn = filters?.byProps || filters?.withProps
+						if (finders && filterFn) {
+							if (typeof finders.getModule === 'function') {
+								const mod = finders.getModule(filterFn(...props))
+								if (mod) return mod
+							}
+							if (typeof finders.lookupModule === 'function') {
+								const list = finders.lookupModule(filterFn(...props))
+								if (list && list.length > 0) return list[0]
+							}
+						}
+					} catch (e) {
+						console.warn('[Dislate] findModuleByProps error:', e)
+					}
+					return null
+				}
+
+				function getSelectedChannelId() {
+					if (selectedChannelStore?.getChannelId) {
+						try {
+							const id = selectedChannelStore.getChannelId()
+							if (id) return id
+						} catch {}
+					}
+					const store =
+						findModuleByProps('getChannelId', 'getVoiceChannelId') ||
+						findModuleByProps('getChannelId')
+					if (store?.getChannelId) {
+						selectedChannelStore = store
+						try {
+							const id = store.getChannelId()
+							if (id) return id
+						} catch {}
+					}
+					return ''
+				}
+
+				function resolveChatInputs() {
+					if (chatInputs?.getBestActiveInputForChannelId) return chatInputs
+					const mod = findModuleByProps('getBestActiveInputForChannelId')
+					if (mod?.getBestActiveInputForChannelId) {
+						chatInputs = mod
+						return mod
+					}
+					return null
+				}
+
+				function resolveMessageActions() {
+					if (messageActions?.sendMessage) return messageActions
+					const explicit =
+						valenced?.discord?.actions?.MessageActions ||
+						globalThis.valenced?.discord?.actions?.MessageActions
+					if (explicit?.sendMessage) {
+						messageActions = explicit
+						return explicit
+					}
+					const candidates = [
+						findModuleByProps('sendMessage', 'receiveMessage'),
+						findModuleByProps('sendMessage', 'editMessage'),
+						findModuleByProps('sendMessage', 'deleteMessage'),
+						findModuleByProps('sendMessage', 'sendBotMessage'),
+						findModuleByProps('sendMessage'),
+					]
+					for (const cand of candidates) {
+						if (!cand) continue
+						if (typeof cand.sendMessage === 'function') {
+							messageActions = cand
+							return cand
+						}
+						if (cand.default && typeof cand.default.sendMessage === 'function') {
+							messageActions = cand.default
+							return cand.default
+						}
+					}
+					return null
+				}
+
 				function insertIntoChatbox(channelId, text) {
 					try {
-						const input = chatInputs?.getBestActiveInputForChannelId?.(channelId)
+						const resolvedInputs = resolveChatInputs()
+						const targetChannelId = channelId || getSelectedChannelId()
+						const input = resolvedInputs?.getBestActiveInputForChannelId?.(targetChannelId)
 						if (input) {
 							if (typeof input.insertText === 'function') {
 								input.insertText(text)
@@ -1267,13 +1352,43 @@ CRITICAL FORMATTING RULES:
 				}
 
 				function sendChatMessage(channelId, text) {
-					try {
-						if (messageActions?.sendMessage && channelId) {
-							messageActions.sendMessage(channelId, { content: text }, true)
+					const targetChannelId = channelId || getSelectedChannelId()
+					const actions = resolveMessageActions()
+
+					if (actions?.sendMessage && targetChannelId) {
+						try {
+							const res = actions.sendMessage(targetChannelId, { content: text })
+							if (res && typeof res.catch === 'function') {
+								res.catch((err) => {
+									console.error('[Dislate] sendMessage promise rejected:', err)
+									insertIntoChatbox(targetChannelId, text)
+									const Alert = getAlert()
+									if (Alert?.alert) {
+										Alert.alert(
+											'Dislate Error',
+											`Failed to send directly: ${err?.message || err}. Translation placed in chatbar.`,
+										)
+									} else {
+										showToast('Failed to send; placed in chatbar.')
+									}
+								})
+							}
 							return true
+						} catch (e) {
+							console.error('[Dislate] sendChatMessage error:', e)
 						}
-					} catch (e) {
-						console.error('[Dislate] sendChatMessage error:', e)
+					}
+
+					// Fallback if MessageActions or channelId couldn't be resolved or threw
+					const inserted = insertIntoChatbox(targetChannelId, text)
+					const Alert = getAlert()
+					if (Alert?.alert) {
+						Alert.alert(
+							'Dislate Notice',
+							`Direct send is unavailable in this channel. ${inserted ? 'The translation has been placed in your chat input bar for you to send.' : 'Could not insert into chat input bar.'}`,
+						)
+					} else {
+						showToast('Direct send unavailable; placed in chatbar.')
 					}
 					return false
 				}
@@ -1293,9 +1408,10 @@ CRITICAL FORMATTING RULES:
 									style: 'cancel',
 								},
 								{
-									text: 'Edit',
+									text: 'Use Result',
 									onPress: () => {
-										const inserted = insertIntoChatbox(channelId, translatedText)
+										const targetChannelId = channelId || getSelectedChannelId()
+										const inserted = insertIntoChatbox(targetChannelId, translatedText)
 										if (!inserted) {
 											const clip = getClipboard()
 											clip?.setString?.(translatedText)
@@ -1303,20 +1419,12 @@ CRITICAL FORMATTING RULES:
 										}
 									},
 								},
-								{
-									text: 'Send',
-									onPress: () => {
-										const sent = sendChatMessage(channelId, translatedText)
-										if (!sent) {
-											showToast('Failed to send message: MessageActions not found')
-										}
-									},
-								},
 							],
 							{ cancelable: true },
 						)
 					} else {
-						insertIntoChatbox(channelId, translatedText)
+						const targetChannelId = channelId || getSelectedChannelId()
+						insertIntoChatbox(targetChannelId, translatedText)
 					}
 				}
 
@@ -1329,21 +1437,6 @@ CRITICAL FORMATTING RULES:
 					)
 					if (api?.cleanup) api.cleanup(unsubInputs)
 					localCleanups.push(unsubInputs)
-
-					const unsubMsg = getModules(
-						withProps('sendMessage', 'receiveMessage'),
-						(mod) => {
-							if (mod?.sendMessage) messageActions = mod
-						},
-					)
-					if (api?.cleanup) api.cleanup(unsubMsg)
-					localCleanups.push(unsubMsg)
-
-					const unsubMsg2 = getModules(withProps('sendMessage'), (mod) => {
-						if (mod?.sendMessage && !messageActions) messageActions = mod
-					})
-					if (api?.cleanup) api.cleanup(unsubMsg2)
-					localCleanups.push(unsubMsg2)
 
 					const unsubStore = getModules(
 						withProps('getChannelId', 'getVoiceChannelId'),
@@ -1358,8 +1451,8 @@ CRITICAL FORMATTING RULES:
 				const translateCmd = {
 					name: 'translate',
 					displayName: 'translate',
-					description: 'Translate text to a target language with Send/Edit options',
-					displayDescription: 'Translate text to a target language with Send/Edit options',
+					description: 'Translate text to a target language',
+					displayDescription: 'Translate text to a target language',
 					applicationId: '-1',
 					type: 1, // ApplicationCommandType.CHAT
 					inputType: 0, // ApplicationCommandInputType.BUILT_IN
