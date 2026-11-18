@@ -1129,31 +1129,189 @@ CRITICAL FORMATTING RULES:
 				// -------------------------------------------------------------------
 				// /translate <toLang> <content> Slash Command
 				// -------------------------------------------------------------------
-				let messageUtil = null
-				let botMessageUtil = null
+				let chatInputs = null
+				let messageActions = null
+				let selectedChannelStore = null
+
+				function extractArg(args, name, index) {
+					if (!args) return ''
+					if (Array.isArray(args)) {
+						const item = args.find(
+							(a) =>
+								a &&
+								(a.name === name ||
+									a.displayName === name ||
+									(typeof a.name === 'string' &&
+										a.name.toLowerCase() === name.toLowerCase())),
+						)
+						if (item !== undefined) {
+							return (item.value ?? item.content ?? item.text ?? '').toString()
+						}
+						const pos = args[index]
+						if (pos !== undefined) {
+							if (typeof pos === 'object' && pos !== null) {
+								return (pos.value ?? pos.content ?? pos.text ?? '').toString()
+							}
+							return pos.toString()
+						}
+					}
+					if (typeof args === 'object' && args !== null) {
+						if (args[name] !== undefined) {
+							const v = args[name]
+							if (typeof v === 'object' && v !== null) {
+								return (v.value ?? v.content ?? v.text ?? '').toString()
+							}
+							return v.toString()
+						}
+						if (Array.isArray(args.options)) {
+							return extractArg(args.options, name, index)
+						}
+					}
+					return ''
+				}
+
+				function getAlert() {
+					return (
+						valenced?.react?.ReactNative?.Alert ||
+						globalThis.ReactNative?.Alert ||
+						null
+					)
+				}
+
+				function getClipboard() {
+					return (
+						valenced?.externals?.ReactNativeClipboard?.Clipboard ||
+						valenced?.react?.ReactNative?.Clipboard ||
+						globalThis.ReactNative?.Clipboard ||
+						null
+					)
+				}
+
+				function showToast(text) {
+					try {
+						const ToastActionCreators = valenced?.discord?.actions?.ToastActionCreators
+						if (ToastActionCreators?.open) {
+							ToastActionCreators.open('DISLATE_TOAST', { text, variant: 'default' })
+						}
+					} catch {}
+				}
+
+				function insertIntoChatbox(channelId, text) {
+					try {
+						const input = chatInputs?.getBestActiveInputForChannelId?.(channelId)
+						if (input) {
+							if (typeof input.insertText === 'function') {
+								input.insertText(text)
+								return true
+							}
+							if (typeof input.setText === 'function') {
+								input.setText(text)
+								return true
+							}
+						}
+					} catch (e) {
+						console.warn('[Dislate] insertIntoChatbox error:', e)
+					}
+					return false
+				}
+
+				function sendChatMessage(channelId, text) {
+					try {
+						if (messageActions?.sendMessage && channelId) {
+							messageActions.sendMessage(channelId, { content: text }, true)
+							return true
+						}
+					} catch (e) {
+						console.error('[Dislate] sendChatMessage error:', e)
+					}
+					return false
+				}
+
+				function showTranslateAlert(targetLang, translatedText, channelId) {
+					const Alert = getAlert()
+					const langName = LANGUAGES[targetLang] || targetLang.toUpperCase()
+					const title = `Dislate (${langName})`
+
+					if (Alert?.alert) {
+						Alert.alert(
+							title,
+							translatedText,
+							[
+								{
+									text: 'Cancel',
+									style: 'cancel',
+								},
+								{
+									text: 'Edit',
+									onPress: () => {
+										const inserted = insertIntoChatbox(channelId, translatedText)
+										if (!inserted) {
+											const clip = getClipboard()
+											clip?.setString?.(translatedText)
+											showToast('Copied translation to clipboard')
+										}
+									},
+								},
+								{
+									text: 'Send',
+									onPress: () => {
+										const sent = sendChatMessage(channelId, translatedText)
+										if (!sent) {
+											showToast('Failed to send message: MessageActions not found')
+										}
+									},
+								},
+							],
+							{ cancelable: true },
+						)
+					} else {
+						insertIntoChatbox(channelId, translatedText)
+					}
+				}
 
 				if (getModules && withProps) {
-					const unsubMsg = getModules(withProps('sendMessage'), (mod) => {
-						if (mod?.sendMessage) messageUtil = mod
-					})
+					const unsubInputs = getModules(
+						withProps('getBestActiveInputForChannelId'),
+						(mod) => {
+							if (mod?.getBestActiveInputForChannelId) chatInputs = mod
+						},
+					)
+					if (api?.cleanup) api.cleanup(unsubInputs)
+					localCleanups.push(unsubInputs)
+
+					const unsubMsg = getModules(
+						withProps('sendMessage', 'receiveMessage'),
+						(mod) => {
+							if (mod?.sendMessage) messageActions = mod
+						},
+					)
 					if (api?.cleanup) api.cleanup(unsubMsg)
 					localCleanups.push(unsubMsg)
 
-					const unsubBot = getModules(withProps('sendBotMessage'), (mod) => {
-						if (mod?.sendBotMessage) botMessageUtil = mod
+					const unsubMsg2 = getModules(withProps('sendMessage'), (mod) => {
+						if (mod?.sendMessage && !messageActions) messageActions = mod
 					})
-					if (api?.cleanup) api.cleanup(unsubBot)
-					localCleanups.push(unsubBot)
+					if (api?.cleanup) api.cleanup(unsubMsg2)
+					localCleanups.push(unsubMsg2)
+
+					const unsubStore = getModules(
+						withProps('getChannelId', 'getVoiceChannelId'),
+						(mod) => {
+							if (mod?.getChannelId) selectedChannelStore = mod
+						},
+					)
+					if (api?.cleanup) api.cleanup(unsubStore)
+					localCleanups.push(unsubStore)
 				}
 
 				const translateCmd = {
 					name: 'translate',
 					displayName: 'translate',
-					description: 'Translate and send a message in any target language',
-					displayDescription: 'Translate and send a message in any target language',
+					description: 'Translate text to a target language with Send/Edit options',
+					displayDescription: 'Translate text to a target language with Send/Edit options',
 					applicationId: '-1',
 					type: 1, // ApplicationCommandType.CHAT
-					inputType: 1, // ApplicationCommandInputType.BUILT_IN_TEXT
+					inputType: 0, // ApplicationCommandInputType.BUILT_IN
 					shouldHide: () => false,
 					options: [
 						{
@@ -1167,39 +1325,40 @@ CRITICAL FORMATTING RULES:
 						{
 							name: 'content',
 							displayName: 'content',
-							description: 'Content to translate and send',
-							displayDescription: 'Content to translate and send',
+							description: 'Content to translate',
+							displayDescription: 'Content to translate',
 							type: 3, // ApplicationCommandOptionType.STRING
 							required: true,
 						},
 					],
-					execute: async (args, ctx) => {
-						const channelId = ctx?.channel?.id
-						try {
-							const toLangArg = (
-								args?.find?.((a) => a.name === 'toLang')?.value ??
-								args?.[0]?.value ??
-								''
-							).toString().trim()
+					execute: async (...execArgs) => {
+						const rawArgs = execArgs[0]
+						const ctx = execArgs[1] || {}
 
-							const contentArg = (
-								args?.find?.((a) => a.name === 'content')?.value ??
-								args?.[1]?.value ??
-								''
-							).toString().trim()
+						const channelId =
+							ctx?.channel?.id ||
+							ctx?.channelId ||
+							selectedChannelStore?.getChannelId?.() ||
+							''
+
+						try {
+							const toLangArg = extractArg(rawArgs, 'toLang', 0).trim()
+							const contentArg = extractArg(rawArgs, 'content', 1).trim()
 
 							if (!toLangArg || !contentArg) {
-								const bot = botMessageUtil || messageUtil
-								if (channelId && bot?.sendBotMessage) {
-									bot.sendBotMessage(
-										channelId,
-										'[Dislate] Both <toLang> and <content> are required.',
-									)
+								const Alert = getAlert()
+								if (Alert?.alert) {
+									Alert.alert('Dislate', 'Both <toLang> and <content> are required.')
+								} else {
+									showToast('Both <toLang> and <content> are required.')
 								}
 								return
 							}
 
 							const targetLang = resolveLanguageCode(toLangArg)
+							const langName = LANGUAGES[targetLang] || targetLang.toUpperCase()
+							showToast(`Translating to ${langName}...`)
+
 							const { masked, placeholders } = maskContent(contentArg)
 
 							const res = await translate(masked, {
@@ -1209,15 +1368,14 @@ CRITICAL FORMATTING RULES:
 							})
 
 							const translatedText = unmaskContent(res.translatedText, placeholders)
-							return { content: translatedText }
+							showTranslateAlert(targetLang, translatedText, channelId)
 						} catch (err) {
-							console.error('[Dislate] /translate command error:', err)
-							const bot = botMessageUtil || messageUtil
-							if (channelId && bot?.sendBotMessage) {
-								bot.sendBotMessage(
-									channelId,
-									`[Dislate] Translation failed: ${err?.message || err}`,
-								)
+							console.error('[Dislate] /translate error:', err)
+							const Alert = getAlert()
+							if (Alert?.alert) {
+								Alert.alert('Dislate Error', `Translation failed: ${err?.message || err}`)
+							} else {
+								showToast(`Translation failed: ${err?.message || err}`)
 							}
 						}
 					},
@@ -1228,19 +1386,6 @@ CRITICAL FORMATTING RULES:
 					if (api?.cleanup) api.cleanup(unregister)
 					localCleanups.push(unregister)
 				} else if (getModules && withProps && instead) {
-					const unpatchExec = instead(translateCmd, 'execute', (args, orig) => {
-						Promise.resolve(orig.apply(translateCmd, args)).then((ret) => {
-							if (ret && typeof ret === 'object' && ret.content) {
-								const chId = args?.[1]?.channel?.id
-								if (chId && messageUtil?.sendMessage) {
-									messageUtil.sendMessage(chId, ret)
-								}
-							}
-						})
-					})
-					if (api?.cleanup) api.cleanup(unpatchExec)
-					localCleanups.push(unpatchExec)
-
 					const unsubCmds = getModules(withProps('getBuiltInCommands'), (commandsModule) => {
 						let builtIns = []
 						try {
