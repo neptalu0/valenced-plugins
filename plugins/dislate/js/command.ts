@@ -342,34 +342,40 @@ export function registerTranslateCommand(api?: any): () => void {
 
 				const targetLang = resolveLanguageCode(toLangArg)
 				const langName = LANGUAGES[targetLang] || targetLang.toUpperCase()
-				showToast(`Translating to ${langName}...`)
-
 				const settings = getSettings()
-				const { masked, placeholders } = maskContent(contentArg)
+				const engineName = (settings.engine || 'google').toUpperCase()
+				showToast(`Translating to ${langName} via ${engineName}...`)
 
-				const res = await translate(masked, {
-					engine: settings.engine,
-					sourceLang: 'auto',
-					targetLang,
-				})
+				;(async () => {
+					try {
+						const { masked, placeholders } = maskContent(contentArg)
 
-				if (!res || !res.translatedText) {
-					throw new Error(
-						`Translation returned empty result from engine: ${res?.engine || settings.engine}`,
-					)
-				}
+						const res = await translate(masked, {
+							engine: settings.engine,
+							sourceLang: 'auto',
+							targetLang,
+						})
 
-				const translatedText = unmaskContent(res.translatedText, placeholders)
+						if (!res || !res.translatedText) {
+							throw new Error(
+								`Translation returned empty result from engine: ${res?.engine || settings.engine}`,
+							)
+						}
 
-				showTranslateAlert(targetLang, translatedText, channelId)
-			} catch (err: any) {
-				console.error('[Dislate] /translate error:', err)
-				const Alert = getAlert()
-				if (Alert?.alert) {
-					Alert.alert('Dislate Error', `Translation failed: ${err?.message || err}`)
-				} else {
-					showToast(`Translation failed: ${err?.message || err}`)
-				}
+						const translatedText = unmaskContent(res.translatedText, placeholders)
+						showTranslateAlert(targetLang, translatedText, channelId)
+					} catch (err: any) {
+						console.error('[Dislate] /translate error:', err)
+						const Alert = getAlert()
+						if (Alert?.alert) {
+							Alert.alert('Dislate Error', `Translation failed: ${err?.message || err}`)
+						} else {
+							showToast(`Translation failed: ${err?.message || err}`)
+						}
+					}
+				})()
+			} catch (syncErr: any) {
+				console.error('[Dislate] /translate sync error:', syncErr)
 			}
 		},
 	}

@@ -138,6 +138,7 @@
 	}
 
 	let currentSettings = { ...DEFAULT_SETTINGS }
+	let pluginStorage = null
 
 	function getSettingsPath() {
 		try {
@@ -150,32 +151,54 @@
 		return null
 	}
 
-	function loadSettings() {
+	async function loadSettings(api) {
+		if (api?.jsonStorage) {
+			pluginStorage = api.jsonStorage
+			try {
+				const saved = api.jsonStorage.cache || (await api.jsonStorage.get())
+				if (saved && typeof saved === 'object') {
+					currentSettings = { ...DEFAULT_SETTINGS, ...saved }
+				}
+			} catch (e) {
+				console.warn('[Dislate] Failed to read settings from jsonStorage', e)
+			}
+		}
+
 		try {
-			const fs = valenced?.modules?.native?.fs
+			const fs =
+				valenced?.modules?.native?.fs ||
+				api?.unscoped?.modules?.native?.fs ||
+				globalThis.valenced?.modules?.native?.fs
 			const path = getSettingsPath()
 			if (path && fs?.existsSync?.(path)) {
 				const raw = fs.readFileSync(path)
 				if (raw) {
-					currentSettings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
+					currentSettings = { ...currentSettings, ...JSON.parse(raw) }
 				}
 			}
 		} catch (e) {
-			console.warn('[Dislate] Failed to read settings from storage', e)
+			console.warn('[Dislate] Failed to read settings from fs storage', e)
 		}
 		return currentSettings
 	}
 
 	function saveSettings(patch) {
 		currentSettings = { ...currentSettings, ...patch }
+		if (pluginStorage?.set) {
+			pluginStorage.set(patch).catch((e) => {
+				console.warn('[Dislate] Failed to persist settings to jsonStorage', e)
+			})
+		}
 		try {
-			const fs = valenced?.modules?.native?.fs
+			const fs =
+				valenced?.modules?.native?.fs ||
+				globalThis.valenced?.modules?.native?.fs
 			const path = getSettingsPath()
 			if (path && fs?.writeFileSync) {
 				fs.writeFileSync(path, JSON.stringify(currentSettings))
 			}
 		} catch (e) {
-			console.warn('[Dislate] Failed to persist settings to storage', e)
+			console.warn('[Dislate] Failed to persist settings to fs storage', e)
 		}
 		return currentSettings
 	}
@@ -300,13 +323,24 @@
 
 		const endpoint = (currentSettings.aiEndpoint || '').trim().replace(/\/+$/, '')
 		const apiKey = (currentSettings.aiApiKey || '').trim()
-		const model = (currentSettings.aiModel || '').trim() || 'gpt-4o-mini'
+		const model = (currentSettings.aiModel || '').trim()
 
-		if (!endpoint || !apiKey) {
-			throw new Error('AI translation requires API Endpoint and API Key to be configured in plugin settings.')
+		if (!endpoint || !apiKey || !model) {
+			const missing = []
+			if (!endpoint) missing.push('API Endpoint')
+			if (!apiKey) missing.push('API Key')
+			if (!model) missing.push('Model')
+			throw new Error(`AI engine requires ${missing.join(', ')} to be configured in plugin settings.`)
 		}
 
-		const url = `${endpoint}/chat/completions`
+		let url = endpoint
+		if (url.endsWith('/chat/completions')) {
+			// full URL
+		} else if (url.endsWith('/v1')) {
+			url = `${url}/chat/completions`
+		} else {
+			url = `${url}/v1/chat/completions`
+		}
 		const targetName = getLanguageName(targetLang) || targetLang
 
 		const systemPrompt = `You are a professional Discord translator. Translate the text into ${targetName}.
@@ -390,41 +424,27 @@ CRITICAL FORMATTING RULES:
 		}
 
 		let result = null
-		let primaryError = null
 
-		try {
-			if (engine === 'ai') {
-				result = await translateAI(text, targetLang, sourceLang)
-			} else if (engine === 'lingva') {
+		if (engine === 'ai') {
+			result = await translateAI(text, targetLang, sourceLang)
+		} else if (engine === 'lingva') {
+			try {
 				result = await translateLingva(text, targetLang, sourceLang)
-			} else {
+			} catch (lingvaErr) {
+				console.warn('[Dislate] Lingva failed, falling back to Google Translate:', lingvaErr)
 				result = await translateGoogle(text, targetLang, sourceLang)
 			}
-		} catch (err) {
-			primaryError = err
-			console.warn(`[Dislate] Engine ${engine} failed, attempting fallback:`, err)
-		}
-
-		if (!result || !result.translatedText) {
-			// Primary engine failed or returned empty; attempt fallback
+		} else {
 			try {
-				if (engine === 'ai' || engine === 'lingva') {
-					console.log('[Dislate] Falling back to google...')
-					result = await translateGoogle(text, targetLang, sourceLang)
-				} else {
-					console.log('[Dislate] Falling back to lingva...')
-					result = await translateLingva(text, targetLang, sourceLang)
-				}
-			} catch (fallbackError) {
-				console.error('[Dislate] Fallback translation failed:', fallbackError)
-				throw new Error(
-					`Translation failed on ${engine} (${primaryError?.message || primaryError || 'unknown error'}) and fallback (${fallbackError?.message || fallbackError || 'unknown error'})`,
-				)
+				result = await translateGoogle(text, targetLang, sourceLang)
+			} catch (googleErr) {
+				console.warn('[Dislate] Google Translate failed, falling back to Lingva:', googleErr)
+				result = await translateLingva(text, targetLang, sourceLang)
 			}
 		}
 
 		if (!result || !result.translatedText) {
-			throw primaryError || new Error(`Translation engine ${engine} produced no result`)
+			throw new Error(`Translation engine ${engine} produced no result`)
 		}
 
 		translationCache.set(cacheKey, result)
@@ -938,7 +958,7 @@ CRITICAL FORMATTING RULES:
 					React.createElement(TextInput, {
 						value: settings.aiModel,
 						onChangeText: (v) => update({ aiModel: v }),
-						placeholder: 'gpt-4o-mini',
+						placeholder: 'e.g. gpt-4o-mini',
 						placeholderTextColor: '#72767d',
 						style: {
 							backgroundColor: '#202225',
@@ -1072,8 +1092,8 @@ CRITICAL FORMATTING RULES:
 	// ---------------------------------------------------------------------------
 	return {
 		default: plugin({
-			start(api) {
-				loadSettings()
+			async start(api) {
+				await loadSettings(api)
 				console.log('[Dislate] Dislate EX initialized (AI model fetch & slash command enabled)')
 
 				const React = valenced?.react?.React || globalThis.React
@@ -1389,7 +1409,7 @@ CRITICAL FORMATTING RULES:
 							required: true,
 						},
 					],
-					execute: async (...execArgs) => {
+					execute: (...execArgs) => {
 						const rawArgs = execArgs[0]
 						const ctx = execArgs[1] || {}
 
@@ -1399,49 +1419,53 @@ CRITICAL FORMATTING RULES:
 							selectedChannelStore?.getChannelId?.() ||
 							''
 
-						try {
-							const toLangArg = extractArg(rawArgs, 'toLang', 0).trim()
-							const contentArg = extractArg(rawArgs, 'content', 1).trim()
+						const toLangArg = extractArg(rawArgs, 'toLang', 0).trim()
+						const contentArg = extractArg(rawArgs, 'content', 1).trim()
 
-							if (!toLangArg || !contentArg) {
-								const Alert = getAlert()
-								if (Alert?.alert) {
-									Alert.alert('Dislate', 'Both <toLang> and <content> are required.')
-								} else {
-									showToast('Both <toLang> and <content> are required.')
-								}
-								return
-							}
-
-							const targetLang = resolveLanguageCode(toLangArg)
-							const langName = LANGUAGES[targetLang] || targetLang.toUpperCase()
-							showToast(`Translating to ${langName}...`)
-
-							const { masked, placeholders } = maskContent(contentArg)
-
-							const res = await translate(masked, {
-								engine: currentSettings.engine,
-								sourceLang: 'auto',
-								targetLang,
-							})
-
-							if (!res || !res.translatedText) {
-								throw new Error(
-									`Translation returned empty result from engine: ${res?.engine || currentSettings.engine}`,
-								)
-							}
-
-							const translatedText = unmaskContent(res.translatedText, placeholders)
-							showTranslateAlert(targetLang, translatedText, channelId)
-						} catch (err) {
-							console.error('[Dislate] /translate error:', err)
+						if (!toLangArg || !contentArg) {
 							const Alert = getAlert()
 							if (Alert?.alert) {
-								Alert.alert('Dislate Error', `Translation failed: ${err?.message || err}`)
+								Alert.alert('Dislate', 'Both <toLang> and <content> are required.')
 							} else {
-								showToast(`Translation failed: ${err?.message || err}`)
+								showToast('Both <toLang> and <content> are required.')
 							}
+							return
 						}
+
+						const targetLang = resolveLanguageCode(toLangArg)
+						const langName = LANGUAGES[targetLang] || targetLang.toUpperCase()
+						const engineName = (currentSettings.engine || 'google').toUpperCase()
+						showToast(`Translating to ${langName} via ${engineName}...`)
+
+						// Asynchronously run translation without blocking Discord command runner
+						;(async () => {
+							try {
+								const { masked, placeholders } = maskContent(contentArg)
+
+								const res = await translate(masked, {
+									engine: currentSettings.engine,
+									sourceLang: 'auto',
+									targetLang,
+								})
+
+								if (!res || !res.translatedText) {
+									throw new Error(
+										`Translation returned empty result from engine: ${res?.engine || currentSettings.engine}`,
+									)
+								}
+
+								const translatedText = unmaskContent(res.translatedText, placeholders)
+								showTranslateAlert(targetLang, translatedText, channelId)
+							} catch (err) {
+								console.error('[Dislate] /translate error:', err)
+								const Alert = getAlert()
+								if (Alert?.alert) {
+									Alert.alert('Dislate Error', `Translation failed: ${err?.message || err}`)
+								} else {
+									showToast(`Translation failed: ${err?.message || err}`)
+								}
+							}
+						})()
 					},
 				}
 

@@ -107,13 +107,24 @@ export async function translateAI(
 	const settings = getSettings()
 	const endpoint = (settings.aiEndpoint || '').trim().replace(/\/+$/, '')
 	const apiKey = (settings.aiApiKey || '').trim()
-	const model = (settings.aiModel || '').trim() || 'gpt-4o-mini'
+	const model = (settings.aiModel || '').trim()
 
-	if (!endpoint || !apiKey) {
-		throw new Error('AI translation requires API Endpoint and API Key to be configured in plugin settings.')
+	if (!endpoint || !apiKey || !model) {
+		const missing: string[] = []
+		if (!endpoint) missing.push('API Endpoint')
+		if (!apiKey) missing.push('API Key')
+		if (!model) missing.push('Model')
+		throw new Error(`AI engine requires ${missing.join(', ')} to be configured in plugin settings.`)
 	}
 
-	const url = `${endpoint}/chat/completions`
+	let url = endpoint
+	if (url.endsWith('/chat/completions')) {
+		// full URL
+	} else if (url.endsWith('/v1')) {
+		url = `${url}/chat/completions`
+	} else {
+		url = `${url}/v1/chat/completions`
+	}
 	const targetName = LANGUAGES[targetLang] || targetLang
 
 	const systemPrompt = `You are a professional Discord translator. Translate the text into ${targetName}.
@@ -205,43 +216,27 @@ export async function translate(
 	}
 
 	let result: TranslationResult | null = null
-	let primaryError: any = null
 
-	try {
-		if (engine === 'ai') {
-			result = await translateAI(text, targetLang, sourceLang)
-		} else if (engine === 'lingva') {
+	if (engine === 'ai') {
+		result = await translateAI(text, targetLang, sourceLang)
+	} else if (engine === 'lingva') {
+		try {
 			result = await translateLingva(text, targetLang, sourceLang)
-		} else {
+		} catch (lingvaErr) {
+			console.warn('[Dislate] Lingva failed, trying Google Translate fallback:', lingvaErr)
 			result = await translateGoogle(text, targetLang, sourceLang)
 		}
-	} catch (err) {
-		primaryError = err
-		console.warn(
-			`[Dislate] Primary engine (${engine}) failed, trying fallback:`,
-			err,
-		)
-	}
-
-	if (!result || !result.translatedText) {
+	} else {
 		try {
-			if (engine === 'ai' || engine === 'lingva') {
-				console.log('[Dislate] Falling back to google...')
-				result = await translateGoogle(text, targetLang, sourceLang)
-			} else {
-				console.log('[Dislate] Falling back to lingva...')
-				result = await translateLingva(text, targetLang, sourceLang)
-			}
-		} catch (fallbackError: any) {
-			console.error('[Dislate] Fallback translation failed:', fallbackError)
-			throw new Error(
-				`Translation failed on ${engine} (${primaryError?.message || primaryError || 'unknown error'}) and fallback (${fallbackError?.message || fallbackError || 'unknown error'})`,
-			)
+			result = await translateGoogle(text, targetLang, sourceLang)
+		} catch (googleErr) {
+			console.warn('[Dislate] Google Translate failed, trying Lingva fallback:', googleErr)
+			result = await translateLingva(text, targetLang, sourceLang)
 		}
 	}
 
 	if (!result || !result.translatedText) {
-		throw primaryError || new Error(`Translation engine ${engine} produced no result`)
+		throw new Error(`Translation engine ${engine} produced no result`)
 	}
 
 	translationCache.set(cacheKey, result)

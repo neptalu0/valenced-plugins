@@ -416,7 +416,7 @@ export default function DislateSettings() {
 					<TextInput
 						value={settings.aiModel}
 						onChangeText={(v) => update({ aiModel: v })}
-						placeholder="gpt-4o-mini"
+						placeholder="e.g. gpt-4o-mini"
 						placeholderTextColor="#72767d"
 						style={{
 							backgroundColor: '#202225',
