@@ -1,0 +1,24 @@
+{
+	"format": 1,
+	"id": "app.valenced.dislate",
+	"name": "Dislate EX",
+	"description": "Translates Discord messages into your desired language with Google, Lingva, and AI (OpenAI-compatible /v1 with live model picker & markdown preservation).",
+	"author": "neptalu0 <257081242518814720> (https://github.com/neptalu0 \"GitHub\")",
+	"contributors": [
+		"Rico040 <619474349845643275> (https://github.com/Rico040 \"GitHub\")",
+		"acquitelol <581573474296791211> (https://github.com/acquitelol \"GitHub\")",
+		"sapphire <757982547861962752>"
+	],
+	"version": "1.3.0",
+	"dependencies": {
+		"valenced.api": {
+			"version": ">=1 <2"
+		},
+		"discord": {
+			"version": "*"
+		}
+	},
+	"dist": {
+		"script": "index.js"
+	}
+}

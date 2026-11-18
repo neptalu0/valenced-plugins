@@ -1,10 +1,11 @@
 {
-	"name": "@example/valenced-plugins",
+	"name": "valenced-plugins",
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "valenced-plugin build",
-		"build:dev": "valenced-plugin build --dev",
+		"build": "node scripts/build-repo.js",
+		"package": "node scripts/build-repo.js",
+		"pages": "node scripts/build-repo.js",
 		"generate-index": "valenced-plugin generate-index",
 		"plan-releases": "valenced-plugin plan-releases --plugins-dir plugins --plugins-dir themes",
 		"serve": "valenced-plugin serve",
