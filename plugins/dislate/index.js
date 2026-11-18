@@ -193,20 +193,26 @@
 		// 1. Code blocks: ```...``` (do not translate code)
 		let masked = text.replace(/```[\s\S]*?```/g, addPlaceholder)
 
-		// 2. Markdown link targets: [Text](URL) -> [Text](__DISLATE_X__)
+		// 2. Inline code: `...`
+		masked = masked.replace(/`[^`]+`/g, addPlaceholder)
+
+		// 3. Markdown link targets: [Text](URL) -> [Text](__DISLATE_X__)
 		masked = masked.replace(/(\]\()(https?:\/\/[^\s\)]+)(\))/g, (_, p1, url, p3) => {
 			placeholders.push(url)
 			return `${p1}__DISLATE_${placeholders.length - 1}__${p3}`
 		})
 
-		// 3. Standalone URLs: <https://...> or https://...
+		// 4. Standalone URLs: <https://...> or https://...
 		masked = masked.replace(/<?https?:\/\/[^\s>]+>?/g, addPlaceholder)
 
-		// 4. Discord tags: emojis, mentions, roles, channels, slash commands, timestamps
+		// 5. Discord tags: emojis, mentions, roles, channels, slash commands, timestamps
 		masked = masked.replace(
 			/<a?:\w+:\d+>|<@!?\d+>|<@&\d+>|<#\d+>|<\/\w+(?:\s+\w+)?:[0-9]+>|<t:\d+(?::[tTdDfFR])?>/g,
 			addPlaceholder,
 		)
+
+		// 6. Discord emoji shortcodes :name: (e.g. :emojis:, :smile:, :tada:)
+		masked = masked.replace(/:[a-zA-Z0-9_+-]+:/g, addPlaceholder)
 
 		return { masked, placeholders }
 	}
@@ -217,6 +223,8 @@
 			const regex = new RegExp(`__\\s*DISLATE_${i}\\s*__`, 'gi')
 			unmasked = unmasked.replace(regex, placeholders[i])
 		}
+		// Clean up any accidental spaces inserted around markdown link brackets: "] (" -> "]("
+		unmasked = unmasked.replace(/\]\s+\(/g, '](')
 		return unmasked
 	}
 
@@ -375,10 +383,15 @@ CRITICAL FORMATTING RULES:
 
 		const cacheKey = `${engine}:${sourceLang}:${targetLang}:${text}`
 		if (translationCache.has(cacheKey)) {
-			return translationCache.get(cacheKey)
+			const cached = translationCache.get(cacheKey)
+			if (cached && cached.translatedText) {
+				return cached
+			}
 		}
 
-		let result
+		let result = null
+		let primaryError = null
+
 		try {
 			if (engine === 'ai') {
 				result = await translateAI(text, targetLang, sourceLang)
@@ -387,13 +400,31 @@ CRITICAL FORMATTING RULES:
 			} else {
 				result = await translateGoogle(text, targetLang, sourceLang)
 			}
-		} catch (primaryError) {
-			console.warn(`[Dislate] Engine ${engine} failed, attempting fallback:`, primaryError)
-			if (engine === 'ai' || engine === 'lingva') {
-				result = await translateGoogle(text, targetLang, sourceLang)
-			} else {
-				result = await translateLingva(text, targetLang, sourceLang)
+		} catch (err) {
+			primaryError = err
+			console.warn(`[Dislate] Engine ${engine} failed, attempting fallback:`, err)
+		}
+
+		if (!result || !result.translatedText) {
+			// Primary engine failed or returned empty; attempt fallback
+			try {
+				if (engine === 'ai' || engine === 'lingva') {
+					console.log('[Dislate] Falling back to google...')
+					result = await translateGoogle(text, targetLang, sourceLang)
+				} else {
+					console.log('[Dislate] Falling back to lingva...')
+					result = await translateLingva(text, targetLang, sourceLang)
+				}
+			} catch (fallbackError) {
+				console.error('[Dislate] Fallback translation failed:', fallbackError)
+				throw new Error(
+					`Translation failed on ${engine} (${primaryError?.message || primaryError || 'unknown error'}) and fallback (${fallbackError?.message || fallbackError || 'unknown error'})`,
+				)
 			}
+		}
+
+		if (!result || !result.translatedText) {
+			throw primaryError || new Error(`Translation engine ${engine} produced no result`)
 		}
 
 		translationCache.set(cacheKey, result)
@@ -1317,10 +1348,37 @@ CRITICAL FORMATTING RULES:
 						{
 							name: 'toLang',
 							displayName: 'toLang',
-							description: 'Target language code (e.g. es, ja, fr, de, ru) or language name',
-							displayDescription: 'Target language code (e.g. es, ja, fr, de, ru) or language name',
+							description: 'Target language to translate into',
+							displayDescription: 'Target language to translate into',
 							type: 3, // ApplicationCommandOptionType.STRING
 							required: true,
+							choices: [
+								{ name: 'English', displayName: 'English', value: 'en' },
+								{ name: 'Chinese (Simplified)', displayName: 'Chinese (Simplified)', value: 'zh' },
+								{ name: 'Chinese (Traditional)', displayName: 'Chinese (Traditional)', value: 'zh-TW' },
+								{ name: 'Spanish', displayName: 'Spanish', value: 'es' },
+								{ name: 'Japanese', displayName: 'Japanese', value: 'ja' },
+								{ name: 'Korean', displayName: 'Korean', value: 'ko' },
+								{ name: 'French', displayName: 'French', value: 'fr' },
+								{ name: 'German', displayName: 'German', value: 'de' },
+								{ name: 'Russian', displayName: 'Russian', value: 'ru' },
+								{ name: 'Portuguese', displayName: 'Portuguese', value: 'pt' },
+								{ name: 'Italian', displayName: 'Italian', value: 'it' },
+								{ name: 'Arabic', displayName: 'Arabic', value: 'ar' },
+								{ name: 'Hindi', displayName: 'Hindi', value: 'hi' },
+								{ name: 'Indonesian', displayName: 'Indonesian', value: 'id' },
+								{ name: 'Tagalog (Filipino)', displayName: 'Tagalog (Filipino)', value: 'tl' },
+								{ name: 'Vietnamese', displayName: 'Vietnamese', value: 'vi' },
+								{ name: 'Thai', displayName: 'Thai', value: 'th' },
+								{ name: 'Turkish', displayName: 'Turkish', value: 'tr' },
+								{ name: 'Polish', displayName: 'Polish', value: 'pl' },
+								{ name: 'Dutch', displayName: 'Dutch', value: 'nl' },
+								{ name: 'Ukrainian', displayName: 'Ukrainian', value: 'uk' },
+								{ name: 'Swedish', displayName: 'Swedish', value: 'sv' },
+								{ name: 'Greek', displayName: 'Greek', value: 'el' },
+								{ name: 'Czech', displayName: 'Czech', value: 'cs' },
+								{ name: 'Malay', displayName: 'Malay', value: 'ms' },
+							],
 						},
 						{
 							name: 'content',
@@ -1367,6 +1425,12 @@ CRITICAL FORMATTING RULES:
 								targetLang,
 							})
 
+							if (!res || !res.translatedText) {
+								throw new Error(
+									`Translation returned empty result from engine: ${res?.engine || currentSettings.engine}`,
+								)
+							}
+
 							const translatedText = unmaskContent(res.translatedText, placeholders)
 							showTranslateAlert(targetLang, translatedText, channelId)
 						} catch (err) {
@@ -1411,6 +1475,11 @@ CRITICAL FORMATTING RULES:
 							for (const opt of translateCmd.options) {
 								opt.displayName = opt.name
 								opt.displayDescription = opt.description
+								if (opt.choices) {
+									for (const choice of opt.choices) {
+										choice.displayName = choice.name
+									}
+								}
 							}
 						}
 

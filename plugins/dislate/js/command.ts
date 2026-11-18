@@ -34,6 +34,12 @@ export enum ApplicationCommandOptionType {
 	ATTACHMENT = 11,
 }
 
+export interface ApplicationCommandOptionChoice {
+	name: string
+	value: string
+	displayName?: string
+}
+
 export interface ApplicationCommandOption {
 	name: string
 	description: string
@@ -41,6 +47,7 @@ export interface ApplicationCommandOption {
 	type: ApplicationCommandOptionType
 	displayName?: string
 	displayDescription?: string
+	choices?: ApplicationCommandOptionChoice[]
 }
 
 export interface ApplicationCommand {
@@ -268,10 +275,37 @@ export function registerTranslateCommand(api?: any): () => void {
 			{
 				name: 'toLang',
 				displayName: 'toLang',
-				description: 'Target language code (e.g. es, ja, fr, de, ru) or language name',
-				displayDescription: 'Target language code (e.g. es, ja, fr, de, ru) or language name',
+				description: 'Target language to translate into',
+				displayDescription: 'Target language to translate into',
 				type: ApplicationCommandOptionType.STRING,
 				required: true,
+				choices: [
+					{ name: 'English', displayName: 'English', value: 'en' },
+					{ name: 'Chinese (Simplified)', displayName: 'Chinese (Simplified)', value: 'zh' },
+					{ name: 'Chinese (Traditional)', displayName: 'Chinese (Traditional)', value: 'zh-TW' },
+					{ name: 'Spanish', displayName: 'Spanish', value: 'es' },
+					{ name: 'Japanese', displayName: 'Japanese', value: 'ja' },
+					{ name: 'Korean', displayName: 'Korean', value: 'ko' },
+					{ name: 'French', displayName: 'French', value: 'fr' },
+					{ name: 'German', displayName: 'German', value: 'de' },
+					{ name: 'Russian', displayName: 'Russian', value: 'ru' },
+					{ name: 'Portuguese', displayName: 'Portuguese', value: 'pt' },
+					{ name: 'Italian', displayName: 'Italian', value: 'it' },
+					{ name: 'Arabic', displayName: 'Arabic', value: 'ar' },
+					{ name: 'Hindi', displayName: 'Hindi', value: 'hi' },
+					{ name: 'Indonesian', displayName: 'Indonesian', value: 'id' },
+					{ name: 'Tagalog (Filipino)', displayName: 'Tagalog (Filipino)', value: 'tl' },
+					{ name: 'Vietnamese', displayName: 'Vietnamese', value: 'vi' },
+					{ name: 'Thai', displayName: 'Thai', value: 'th' },
+					{ name: 'Turkish', displayName: 'Turkish', value: 'tr' },
+					{ name: 'Polish', displayName: 'Polish', value: 'pl' },
+					{ name: 'Dutch', displayName: 'Dutch', value: 'nl' },
+					{ name: 'Ukrainian', displayName: 'Ukrainian', value: 'uk' },
+					{ name: 'Swedish', displayName: 'Swedish', value: 'sv' },
+					{ name: 'Greek', displayName: 'Greek', value: 'el' },
+					{ name: 'Czech', displayName: 'Czech', value: 'cs' },
+					{ name: 'Malay', displayName: 'Malay', value: 'ms' },
+				],
 			},
 			{
 				name: 'content',
@@ -318,6 +352,12 @@ export function registerTranslateCommand(api?: any): () => void {
 					sourceLang: 'auto',
 					targetLang,
 				})
+
+				if (!res || !res.translatedText) {
+					throw new Error(
+						`Translation returned empty result from engine: ${res?.engine || settings.engine}`,
+					)
+				}
 
 				const translatedText = unmaskContent(res.translatedText, placeholders)
 
@@ -370,6 +410,11 @@ export function registerTranslateCommand(api?: any): () => void {
 			for (const opt of translateCmd.options) {
 				opt.displayName ??= opt.name
 				opt.displayDescription ??= opt.description
+				if (opt.choices) {
+					for (const choice of opt.choices) {
+						choice.displayName ??= choice.name
+					}
+				}
 			}
 		}
 

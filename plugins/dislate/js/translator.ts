@@ -198,10 +198,14 @@ export async function translate(
 
 	const cacheKey = `${engine}:${sourceLang}:${targetLang}:${text}`
 	if (translationCache.has(cacheKey)) {
-		return translationCache.get(cacheKey)!
+		const cached = translationCache.get(cacheKey)
+		if (cached && cached.translatedText) {
+			return cached
+		}
 	}
 
-	let result: TranslationResult
+	let result: TranslationResult | null = null
+	let primaryError: any = null
 
 	try {
 		if (engine === 'ai') {
@@ -211,16 +215,33 @@ export async function translate(
 		} else {
 			result = await translateGoogle(text, targetLang, sourceLang)
 		}
-	} catch (primaryError) {
+	} catch (err) {
+		primaryError = err
 		console.warn(
 			`[Dislate] Primary engine (${engine}) failed, trying fallback:`,
-			primaryError,
+			err,
 		)
-		if (engine === 'ai' || engine === 'lingva') {
-			result = await translateGoogle(text, targetLang, sourceLang)
-		} else {
-			result = await translateLingva(text, targetLang, sourceLang)
+	}
+
+	if (!result || !result.translatedText) {
+		try {
+			if (engine === 'ai' || engine === 'lingva') {
+				console.log('[Dislate] Falling back to google...')
+				result = await translateGoogle(text, targetLang, sourceLang)
+			} else {
+				console.log('[Dislate] Falling back to lingva...')
+				result = await translateLingva(text, targetLang, sourceLang)
+			}
+		} catch (fallbackError: any) {
+			console.error('[Dislate] Fallback translation failed:', fallbackError)
+			throw new Error(
+				`Translation failed on ${engine} (${primaryError?.message || primaryError || 'unknown error'}) and fallback (${fallbackError?.message || fallbackError || 'unknown error'})`,
+			)
 		}
+	}
+
+	if (!result || !result.translatedText) {
+		throw primaryError || new Error(`Translation engine ${engine} produced no result`)
 	}
 
 	translationCache.set(cacheKey, result)

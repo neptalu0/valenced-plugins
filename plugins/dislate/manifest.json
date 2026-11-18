@@ -9,7 +9,7 @@
 		"acquitelol <581573474296791211> (https://github.com/acquitelol \"GitHub\")",
 		"sapphire <757982547861962752>"
 	],
-	"version": "1.4.0",
+	"version": "1.4.1",
 	"dependencies": {
 		"valenced.api": {
 			"version": ">=1 <2"

@@ -24,20 +24,26 @@ export function maskContent(text: string) {
 	// 1. Code blocks: ```...``` (do not translate code)
 	let masked = text.replace(/```[\s\S]*?```/g, addPlaceholder)
 
-	// 2. Markdown link targets: [Text](URL) -> [Text](__DISLATE_X__)
+	// 2. Inline code: `...`
+	masked = masked.replace(/`[^`]+`/g, addPlaceholder)
+
+	// 3. Markdown link targets: [Text](URL) -> [Text](__DISLATE_X__)
 	masked = masked.replace(/(\]\()(https?:\/\/[^\s\)]+)(\))/g, (_, p1, url, p3) => {
 		placeholders.push(url)
 		return `${p1}__DISLATE_${placeholders.length - 1}__${p3}`
 	})
 
-	// 3. Standalone URLs: <https://...> or https://...
+	// 4. Standalone URLs: <https://...> or https://...
 	masked = masked.replace(/<?https?:\/\/[^\s>]+>?/g, addPlaceholder)
 
-	// 4. Discord tags: emojis, mentions, roles, channels, slash commands, timestamps
+	// 5. Discord tags: emojis, mentions, roles, channels, slash commands, timestamps
 	masked = masked.replace(
 		/<a?:\w+:\d+>|<@!?\d+>|<@&\d+>|<#\d+>|<\/\w+(?:\s+\w+)?:[0-9]+>|<t:\d+(?::[tTdDfFR])?>/g,
 		addPlaceholder,
 	)
+
+	// 6. Discord emoji shortcodes :name: (e.g. :emojis:, :smile:, :tada:)
+	masked = masked.replace(/:[a-zA-Z0-9_+-]+:/g, addPlaceholder)
 
 	return { masked, placeholders }
 }
@@ -48,6 +54,8 @@ export function unmaskContent(text: string, placeholders: string[]) {
 		const regex = new RegExp(`__\\s*DISLATE_${i}\\s*__`, 'gi')
 		unmasked = unmasked.replace(regex, placeholders[i])
 	}
+	// Clean up any accidental spaces inserted around markdown link brackets: "] (" -> "]("
+	unmasked = unmasked.replace(/\]\s+\(/g, '](')
 	return unmasked
 }
 
